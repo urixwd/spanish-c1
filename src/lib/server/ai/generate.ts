@@ -17,17 +17,19 @@ Rules:
 
 const JSON_SCHEMA = `{
   "questions": [
-    // For multiple_choice:
-    { "format": "multiple_choice", "topic": "<topic_id>", "stem": "Sentence with ___.", "options": ["a","b","c","d"], "correct_answer": "b", "explanation": "..." },
+    // For multiple_choice — options should NOT have letter prefixes, just the text. correct_answer must be the FULL TEXT of the correct option, not a letter.
+    { "format": "multiple_choice", "topic": "<topic_id>", "stem": "Sentence with ___.", "options": ["hubiera ido", "habría ido", "haya ido", "fue"], "correct_answer": "hubiera ido", "explanation": "..." },
     // For fill_in_blank:
-    { "format": "fill_in_blank", "topic": "<topic_id>", "stem": "Sentence with ___.", "correct_answer": "word", "acceptable_answers": ["word", "alt"], "explanation": "..." },
-    // For cloze:
+    { "format": "fill_in_blank", "topic": "<topic_id>", "stem": "Sentence with ___.", "correct_answer": "para", "acceptable_answers": ["para"], "explanation": "..." },
+    // For cloze — same rule: correct_answer is the full text, not a letter. Options have no letter prefixes.
     { "format": "cloze", "topic": "<topic_id>", "passage": "Text with ___(1) and ___(2)...", "blanks": [
-      { "id": 1, "type": "free", "correct_answer": "word", "explanation": "..." },
-      { "id": 2, "type": "dropdown", "options": ["a","b","c","d"], "correct_answer": "b", "explanation": "..." }
+      { "id": 1, "type": "free", "correct_answer": "tuviera", "explanation": "..." },
+      { "id": 2, "type": "dropdown", "options": ["iría", "voy", "fui", "iba"], "correct_answer": "iría", "explanation": "..." }
     ]}
   ]
-}`;
+}
+
+CRITICAL: correct_answer must always be the EXACT FULL TEXT that matches one of the options, NEVER a letter like "a", "b", "c", "d". Options must NOT have letter prefixes like "a) " or "b) ".`;
 
 export async function generateQuestions(
 	selectedTopics: TopicId[],
@@ -66,6 +68,23 @@ ${JSON_SCHEMA}`;
 	return parsed;
 }
 
+const LETTER_INDEX: Record<string, number> = { a: 0, b: 1, c: 2, d: 3 };
+
+function fixCorrectAnswer(options: string[], item: { correct_answer: string }) {
+	// If correct_answer is already one of the options, nothing to do
+	if (options.includes(item.correct_answer)) return;
+
+	// If it's a letter like "a", "b", "c", "d" — resolve to the actual option text
+	const lower = item.correct_answer.trim().toLowerCase().replace(/\)$/, '');
+	if (lower in LETTER_INDEX) {
+		const idx = LETTER_INDEX[lower];
+		if (idx < options.length) {
+			console.warn(`[generate] Fixed correct_answer "${item.correct_answer}" -> "${options[idx]}"`);
+			item.correct_answer = options[idx];
+		}
+	}
+}
+
 function validateQuizRound(round: QuizRound): void {
 	if (!round.questions || !Array.isArray(round.questions)) {
 		throw new Error('Invalid quiz round: missing questions array');
@@ -93,6 +112,10 @@ function validateQuizRound(round: QuizRound): void {
 			if (!q.stem || !q.options || q.options.length !== 4 || !q.correct_answer) {
 				throw new Error('Invalid multiple choice question');
 			}
+			// Strip letter prefixes from options (e.g. "a) hubiera" -> "hubiera")
+			q.options = q.options.map((o) => o.replace(/^[a-d]\)\s*/i, ''));
+			// Fix correct_answer if it's a letter index instead of the actual text
+			fixCorrectAnswer(q.options, q);
 		} else if (q.format === 'fill_in_blank') {
 			if (!q.stem || !q.correct_answer) {
 				throw new Error('Invalid fill-in-blank question');
@@ -100,6 +123,12 @@ function validateQuizRound(round: QuizRound): void {
 		} else if (q.format === 'cloze') {
 			if (!q.passage || !q.blanks || q.blanks.length === 0) {
 				throw new Error('Invalid cloze question');
+			}
+			for (const blank of q.blanks) {
+				if (blank.options) {
+					blank.options = blank.options.map((o) => o.replace(/^[a-d]\)\s*/i, ''));
+					fixCorrectAnswer(blank.options, blank);
+				}
 			}
 		}
 	}
